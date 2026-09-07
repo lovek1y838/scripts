@@ -1,9 +1,8 @@
-cat > /root/install-hy2-dante-v5.sh <<'SCRIPT'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
 # ============================================================
-# HY2 + Dante V5 (Universal Dynamic Version)
+# HY2 + Dante V5 (Non-blocking Universal Version)
 # Debian 12
 # ============================================================
 
@@ -13,11 +12,11 @@ HY2_VERSION="v2.12.2"
 HY2_PORT="5443"
 SOCKS_PORT="1080"
 
-# 1. 自动获取公网 IP
+# 1. 自动获取当前 VPS 公网 IP
 PUBLIC_IP="$(curl -s https://api.ipify.org || curl -s https://ipv4.icanhazip.com)"
 
-# 2. 动态获取域名（未指定时使用默认值）
-HY2_DOMAIN="${HY2_DOMAIN:-tkvvla001.shoppinmore.com}"
+# 2. 动态获取域名/IP（若未指定，默认使用当前公网 IP）
+HY2_DOMAIN="${HY2_DOMAIN:-$PUBLIC_IP}"
 
 HY2_DIR="/etc/hysteria"
 HY2_CERT="${HY2_DIR}/server.crt"
@@ -62,8 +61,8 @@ echo "CPU："
 uname -m
 
 echo
-echo "检测到公网 IP：${PUBLIC_IP}"
-echo "设置域名：${HY2_DOMAIN}"
+echo "公网 IP：${PUBLIC_IP}"
+echo "设置 SNI/域名：${HY2_DOMAIN}"
 
 log "1/10 更新 Debian 系统并安装依赖"
 
@@ -88,24 +87,19 @@ apt-get install -y \
 
 log "2/10 检查域名解析"
 
-RESOLVED_IP="$(getent ahostsv4 "${HY2_DOMAIN}" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
-
-if [[ -z "${RESOLVED_IP}" ]]; then
-    echo "[WARN] ${HY2_DOMAIN} 当前无法解析"
-    read -r -p "仍然继续部署吗？输入 YES 继续： " CONFIRM
-    if [[ "${CONFIRM}" != "YES" ]]; then
-        die "已停止"
-    fi
+if [[ "${HY2_DOMAIN}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "[INFO] 正在使用纯 IP 地址模式部署"
 else
-    echo "DNS：${HY2_DOMAIN} -> ${RESOLVED_IP}"
-    if [[ "${RESOLVED_IP}" != "${PUBLIC_IP}" ]]; then
-        echo "[WARN] DNS 当前解析到 ${RESOLVED_IP}，预期为 ${PUBLIC_IP}"
-        read -r -p "仍然继续部署吗？输入 YES 继续： " CONFIRM
-        if [[ "${CONFIRM}" != "YES" ]]; then
-            die "请先修正 DNS"
-        fi
+    RESOLVED_IP="$(getent ahostsv4 "${HY2_DOMAIN}" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
+    if [[ -z "${RESOLVED_IP}" ]]; then
+        echo "[WARN] ${HY2_DOMAIN} 当前无法解析，继续完成部署..."
     else
-        echo "[OK] DNS 与公网 IP 一致"
+        echo "DNS：${HY2_DOMAIN} -> ${RESOLVED_IP}"
+        if [[ "${RESOLVED_IP}" != "${PUBLIC_IP}" ]]; then
+            echo "[WARN] DNS 解析到 ${RESOLVED_IP}，与服务器公网 IP (${PUBLIC_IP}) 不匹配，继续完成部署..."
+        else
+            echo "[OK] DNS 与公网 IP 一致"
+        fi
     fi
 fi
 
@@ -132,12 +126,18 @@ mkdir -p /var/lib/hysteria
 rm -rf "${HY2_DIR}/acme" /var/lib/hysteria/acme /root/acme
 rm -f "${HY2_CERT}" "${HY2_KEY}"
 
+if [[ "${HY2_DOMAIN}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    SAN_ARG="IP:${HY2_DOMAIN}"
+else
+    SAN_ARG="DNS:${HY2_DOMAIN}"
+fi
+
 openssl req -x509 -nodes -newkey rsa:2048 \
     -keyout "${HY2_KEY}" \
     -out "${HY2_CERT}" \
     -days 3650 \
     -subj "/CN=${HY2_DOMAIN}" \
-    -addext "subjectAltName=DNS:${HY2_DOMAIN}"
+    -addext "subjectAltName=${SAN_ARG}"
 
 if [[ ! -s "${HY2_CERT}" || ! -s "${HY2_KEY}" ]]; then
     die "HY2 自签证书生成失败"
@@ -288,16 +288,15 @@ if ! systemctl is-active --quiet danted; then
 fi
 
 FINGERPRINT="$(openssl x509 -in "${HY2_CERT}" -noout -fingerprint -sha256 | sed 's/.*=//' | tr -d ':')"
-HY2_URI="hysteria2://${HY2_PASSWORD}@${HY2_DOMAIN}:${HY2_PORT}/?sni=${HY2_DOMAIN}&insecure=1&pinSHA256=${FINGERPRINT}#HY2-LA001"
+HY2_URI="hysteria2://${HY2_PASSWORD}@${HY2_DOMAIN}:${HY2_PORT}/?sni=${HY2_DOMAIN}&insecure=1&pinSHA256=${FINGERPRINT}#HY2-NODE"
 
 cat > /root/HY2-SOCKS5-INFO.txt <<EOF
 HY2 SERVER
 ==============================
 IP: ${PUBLIC_IP}
-Domain: ${HY2_DOMAIN}
+Domain/SNI: ${HY2_DOMAIN}
 Port: ${HY2_PORT}/UDP
 Password: ${HY2_PASSWORD}
-SNI: ${HY2_DOMAIN}
 SHA256: ${FINGERPRINT}
 HY2 URI: ${HY2_URI}
 
@@ -318,7 +317,3 @@ echo "HY2 + SOCKS5 V5 部署成功"
 echo "连接配置已存入 /root/HY2-SOCKS5-INFO.txt"
 echo "============================================================"
 cat /root/HY2-SOCKS5-INFO.txt
-SCRIPT
-
-chmod +x /root/install-hy2-dante-v5.sh
-bash /root/install-hy2-dante-v5.sh
