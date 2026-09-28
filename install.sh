@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # ============================================================
-# HY2 + Dante V5 (Non-blocking Universal Version)
+# HY2 + Dante V5 (Non-blocking Universal Version) - Optimized
 # Debian 12
 # ============================================================
 
@@ -66,9 +66,11 @@ echo "设置 SNI/域名：${HY2_DOMAIN}"
 
 log "1/10 更新 Debian 系统并安装依赖"
 
+# 【优化部分】仅更新软件源索引，移除导致低配谷歌云卡死死机的所有全局升级指令
 apt-get update
-apt-get full-upgrade -y
+apt-get install -f -y
 
+# 精准装配网络节点所需的基础依赖包
 apt-get install -y \
     curl \
     wget \
@@ -214,7 +216,7 @@ echo "${SOCKS_USER}:${SOCKS_PASSWORD}" | chpasswd
 DEFAULT_IFACE="$(ip route get 1.1.1.1 | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
 
 if [[ -z "${DEFAULT_IFACE}" ]]; then
-    die "无法确定默认网络接口"
+    die "无法确定默认 network 接口"
 fi
 
 cat > "${DANTE_CONFIG}" <<EOF
